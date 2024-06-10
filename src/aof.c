@@ -616,7 +616,7 @@ int writeAofManifestFile(sds buf)
         buf += nwritten;
     }
 
-    if (aofFsyncUring(fd) == -1)
+    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the temp AOF file %s: %s.",
                   tmp_am_name, strerror(errno));
@@ -821,6 +821,7 @@ void aofOpenIfNeededOnServerStart(void)
     /* Here we should use 'O_APPEND' flag. */
     sds aof_filepath = makePath(server.aof_dirname, aof_name);
     server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    io_uring_register_files(&server.aof_ring, &server.aof_fd, 1);
     sdsfree(aof_filepath);
     if (server.aof_fd == -1)
     {
@@ -1062,7 +1063,7 @@ void stopAppendOnly(void)
 {
     serverAssert(server.aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    if (aofFsyncUring(server.aof_fd) == -1)
+    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
     }
@@ -1140,41 +1141,6 @@ int startAppendOnly(void)
     return C_OK;
 }
 
-/* URING AOF */
-int aofFsyncUring(int fd)
-{
-    struct io_uring_sqe *sqe;
-
-    sqe = io_uring_get_sqe(&ring);
-    if (!sqe)
-    {
-        perror("Unable to get SQE for fsync");
-        return -1;
-    }
-    io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
-    sqe->flags |= IOSQE_CQE_SKIP_SUCCESS;
-    sqe->user_data = NULL;
-
-    return 0;
-}
-ssize_t aofWriteUring(int fd, const char *buf, size_t len)
-{
-    char *temp_buf = (char *)zmalloc(len);
-    if (!temp_buf)
-    {
-        fprintf(stderr, "Failed to allocate memory for temp buffer\n");
-        return -1;
-    }
-    memcpy(temp_buf, buf, len);
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_write(sqe, fd, temp_buf, len, 0);
-    sqe->flags |= IOSQE_IO_LINK;
-    sqe->user_data = (uintptr_t)temp_buf;
-
-    return len;
-}
-
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
@@ -1230,7 +1196,6 @@ void flushAppendOnlyFile(int force)
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
-
     if (sdslen(server.aof_buf) == 0)
     {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1307,9 +1272,8 @@ void flushAppendOnlyFile(int force)
     {
         usleep(server.aof_flush_sleep);
     }
-
     latencyStartMonitor(latency);
-    nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf),&server.aof_ring) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
 
     /* We want to capture different events for delayed writes:
@@ -1334,7 +1298,7 @@ void flushAppendOnlyFile(int force)
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
 
-    if (nwritten != (ssize_t)sdslen(server.aof_buf))
+    if (nwritten != (ssize_t)sdslen(server.aof_buf) && !server.aof_liburing)
     {
         static time_t last_write_error_log = 0;
         int can_log = 0;
@@ -1464,7 +1428,7 @@ try_fsync:
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
 
-        if (aofFsyncUring(server.aof_fd) == -1)
+        if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
                                   "AOF fsync policy is 'always': %s. Exiting...",

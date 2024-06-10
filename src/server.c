@@ -5,7 +5,7 @@
  * Licensed under your choice of the Redis Source Available License 2.0
  * (RSALv2) or the Server Side Public License v1 (SSPLv1).
  */
-
+#include "uring.h"
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -52,62 +52,7 @@
 #else
 #define GNUC_VERSION_STR "0.0.0"
 #endif
-
-struct io_uring ring;
-
-void setup_io_uring()
-{
-
-    int ret = io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
-    if (ret < 0)
-    {
-        fprintf(stderr, "io_uring_queue_init_params: %s\n", strerror(-ret));
-        exit(1);
-    }
-} /* Our shared "common" objects */
-
-void process_completions()
-{
-    int nr_submitted = io_uring_submit(&ring);
-    if (nr_submitted < 0)
-    {
-        fprintf(stderr, "io_uring_submit: %s\n", strerror(-nr_submitted));
-        return;
-    }
-
-    printf("Submitted %d events\n", nr_submitted);
-
-    for (int i = 0; i < nr_submitted; i++)
-    {
-        struct io_uring_cqe *cqe;
-        int ret = io_uring_peek_cqe(&ring, &cqe);
-        if (ret < 0)
-        {
-            fprintf(stderr, "io_uring_peek_cqe: %s\n", strerror(-ret));
-            continue; // Continue to the next iteration
-        }
-
-        if (cqe->res < 0)
-        {
-            fprintf(stderr, "Error in completion: %s\n", strerror(-cqe->res));
-        }
-
-        if (cqe->user_data != NULL)
-        {
-            printf("Freeing buffer: %p\n", (char *)cqe->user_data);
-            char *completed_buf = (char *)cqe->user_data;
-            // Uncomment the next line after debugging
-            zfree(completed_buf);
-        }
-        else
-        {
-            i--;
-        }
-
-        printf("iteration %d of %d\n", i, nr_submitted);
-        io_uring_cqe_seen(&ring, cqe);
-    }
-}
+#define FLAG_MASK 0x1
 
 struct sharedObjectsStruct shared;
 
@@ -1469,8 +1414,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
             }
         }
     }
-
-    process_completions();
+    if (server.aof_liburing)
+    {
+        run_with_period(100)
+        {
+            io_uring_submit(&server.aof_ring);
+        }
+    }
 
     /* for debug purposes: skip actual cron work if pause_cron is on */
     if (server.pause_cron)
@@ -1577,9 +1527,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     /* We need to do a few operations on clients asynchronously. */
     clientsCron();
 
-    run_with_period(100)
-    {
-    }
     /* Handle background operations on Redis databases. */
     databasesCron();
 
@@ -3060,7 +3007,18 @@ void initServer(void)
     }
 
     /* Initialize IO_URING ring*/
-    setup_io_uring();
+    if (server.aof_liburing)
+    {
+        server.aof_ring = setup_io_uring();
+        
+        int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.aof_ring);
+        if (err != 0)
+        {
+            serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+            exit(1);
+        }
+    }
+    
     /* Register a readable event for the pipe used to awake the event loop
      * from module threads. */
     if (aeCreateFileEvent(server.el, server.module_pipe[0], AE_READABLE,
