@@ -58,37 +58,53 @@ struct io_uring ring;
 void setup_io_uring()
 {
 
-    int ret = io_uring_queue_init(QUEUE_DEPTH, &ring, IORING_SETUP_IOPOLL);
+    int ret = io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
     if (ret < 0)
     {
         fprintf(stderr, "io_uring_queue_init_params: %s\n", strerror(-ret));
         exit(1);
     }
 } /* Our shared "common" objects */
-void completion_check()
-{
-    struct io_uring_cqe *cqe;
-    int ret;
 
-    while (1)
+void process_completions()
+{
+    int nr_submitted = io_uring_submit(&ring);
+    if (nr_submitted < 0)
     {
-        ret = io_uring_peek_cqe(&ring, &cqe);
+        fprintf(stderr, "io_uring_submit: %s\n", strerror(-nr_submitted));
+        return;
+    }
+
+    printf("Submitted %d events\n", nr_submitted);
+
+    for (int i = 0; i < nr_submitted; i++)
+    {
+        struct io_uring_cqe *cqe;
+        int ret = io_uring_peek_cqe(&ring, &cqe);
         if (ret < 0)
         {
             fprintf(stderr, "io_uring_peek_cqe: %s\n", strerror(-ret));
-            return;
-        }
-
-        if (!cqe)
-        {
-            break;
+            continue; // Continue to the next iteration
         }
 
         if (cqe->res < 0)
         {
-            fprintf(stderr, "Async write failed: %s\n", strerror(-cqe->res));
+            fprintf(stderr, "Error in completion: %s\n", strerror(-cqe->res));
         }
 
+        if (cqe->user_data != NULL)
+        {
+            printf("Freeing buffer: %p\n", (char *)cqe->user_data);
+            char *completed_buf = (char *)cqe->user_data;
+            // Uncomment the next line after debugging
+            zfree(completed_buf);
+        }
+        else
+        {
+            i--;
+        }
+
+        printf("iteration %d of %d\n", i, nr_submitted);
         io_uring_cqe_seen(&ring, cqe);
     }
 }
@@ -1454,6 +1470,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
         }
     }
 
+    process_completions();
+
     /* for debug purposes: skip actual cron work if pause_cron is on */
     if (server.pause_cron)
         return 1000 / server.hz;
@@ -1561,7 +1579,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
 
     run_with_period(100)
     {
-        completion_check();
     }
     /* Handle background operations on Redis databases. */
     databasesCron();
@@ -1725,7 +1742,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     server.cronloops++;
 
     server.el_cron_duration = getMonotonicUs() - cron_start;
-
     return 1000 / server.hz;
 }
 
@@ -1786,7 +1802,6 @@ void whileBlockedCron(void)
         /* Increment cronloop so that run_with_period works. */
         server.cronloops++;
     }
-
     /* Other cron jobs do not need to be done in a loop. No need to check
      * server.blocked_last_cron since we have an early exit at the top. */
 

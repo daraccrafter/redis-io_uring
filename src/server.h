@@ -71,9 +71,18 @@ typedef struct redisObject robj;
 #include "crc64.h"
 #include "liburing.h"
 
-#define QUEUE_DEPTH 1024
+#define QUEUE_DEPTH 4096
 extern struct io_uring ring;
 
+typedef struct {
+    int operation_type;
+    char *buffer;
+} OperationData;
+typedef enum {
+    URING_WRITE,
+    URING_READ,
+    URING_FSYNC
+} OperationType;
 struct hdr_histogram;
 
 /* helpers */

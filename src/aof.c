@@ -616,7 +616,7 @@ int writeAofManifestFile(sds buf)
         buf += nwritten;
     }
 
-    if (redis_fsync(fd) == -1)
+    if (aofFsyncUring(fd) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the temp AOF file %s: %s.",
                   tmp_am_name, strerror(errno));
@@ -894,7 +894,7 @@ int openNewIncrAofForAppend(void)
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
     sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
-    newfd = open(new_aof_filepath, O_RDWR | O_CREAT | O_DIRECT | O_SYNC, 0644);
+    newfd = open(new_aof_filepath, O_RDWR | O_CREAT | O_SYNC, 0644);
     sdsfree(new_aof_filepath);
     if (newfd == -1)
     {
@@ -1062,7 +1062,7 @@ void stopAppendOnly(void)
 {
     serverAssert(server.aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    if (redis_fsync(server.aof_fd) == -1)
+    if (aofFsyncUring(server.aof_fd) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
     }
@@ -1141,26 +1141,36 @@ int startAppendOnly(void)
 }
 
 /* URING AOF */
-ssize_t aofWriteUring(int fd, const char *buf, size_t len)
+int aofFsyncUring(int fd)
 {
     struct io_uring_sqe *sqe;
 
     sqe = io_uring_get_sqe(&ring);
     if (!sqe)
     {
-        serverLog(LL_WARNING, "Unable to get SQE for write");
+        perror("Unable to get SQE for fsync");
         return -1;
     }
+    io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
+    sqe->flags |= IOSQE_CQE_SKIP_SUCCESS;
+    sqe->user_data = NULL;
 
-    io_uring_prep_write(sqe, fd, (void *)buf, len, 0);
-    io_uring_sqe_set_flags(sqe, IOSQE_IO_HARDLINK); // If needed, ensure appropriate flags are set
-
-    int ret = io_uring_submit(&ring);
-    if (ret < 0)
+    return 0;
+}
+ssize_t aofWriteUring(int fd, const char *buf, size_t len)
+{
+    char *temp_buf = (char *)zmalloc(len);
+    if (!temp_buf)
     {
-        serverLog(LL_WARNING, "io_uring_submit failed for write: %s", strerror(-ret));
+        fprintf(stderr, "Failed to allocate memory for temp buffer\n");
         return -1;
     }
+    memcpy(temp_buf, buf, len);
+
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+    io_uring_prep_write(sqe, fd, temp_buf, len, 0);
+    sqe->flags |= IOSQE_IO_LINK;
+    sqe->user_data = (uintptr_t)temp_buf;
 
     return len;
 }
@@ -1214,6 +1224,7 @@ ssize_t aofWrite(int fd, const char *buf, size_t len)
  * However if force is set to 1 we'll write regardless of the background
  * fsync. */
 #define AOF_WRITE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
+
 void flushAppendOnlyFile(int force)
 {
     ssize_t nwritten;
@@ -1300,6 +1311,7 @@ void flushAppendOnlyFile(int force)
     latencyStartMonitor(latency);
     nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
+
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
      * active, and when the above two conditions are missing.
@@ -1401,6 +1413,7 @@ void flushAppendOnlyFile(int force)
                 server.aof_last_incr_size += nwritten;
                 sdsrange(server.aof_buf, nwritten, -1);
             }
+
             return; /* We'll try again on the next call... */
         }
     }
@@ -1415,13 +1428,16 @@ void flushAppendOnlyFile(int force)
             server.aof_last_write_status = C_OK;
         }
     }
+
     server.aof_current_size += nwritten;
     server.aof_last_incr_size += nwritten;
 
     /* Re-use AOF buffer when it is small enough. The maximum comes from the
      * arena size of 4k minus some overhead (but is otherwise arbitrary). */
+
     if ((sdslen(server.aof_buf) + sdsavail(server.aof_buf)) < 4000)
     {
+
         sdsclear(server.aof_buf);
     }
     else
@@ -1434,7 +1450,9 @@ try_fsync:
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
      * children doing I/O in the background. */
     if (server.aof_no_fsync_on_rewrite && hasActiveChildProcess())
+    {
         return;
+    }
 
     /* Perform the fsync if needed. */
     if (server.aof_fsync == AOF_FSYNC_ALWAYS)
@@ -1445,7 +1463,8 @@ try_fsync:
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        if (redis_fsync(server.aof_fd) == -1)
+
+        if (aofFsyncUring(server.aof_fd) == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
                                   "AOF fsync policy is 'always': %s. Exiting...",
