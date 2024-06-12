@@ -31,9 +31,8 @@ void process_completions(struct io_uring *ring)
         }
         else if (cqe->user_data != NULL)
         {
-            char *completed_buf = (char *)cqe->user_data;
-            printf("Freeing buffer at %p\n", completed_buf);
-            je_free(completed_buf);
+            printf("UserData: %p\n", (void *)cqe->user_data);
+            je_free((void *)cqe->user_data);
         }
 
         io_uring_cqe_seen(ring, cqe);
@@ -44,10 +43,16 @@ int aofFsyncUring(int fd, struct io_uring *ring)
 {
     struct io_uring_sqe *sqe;
 
-    sqe = io_uring_get_sqe(ring);
+    int retries = 0;
+    printf("Trying to get SQE\n");
+    while ((sqe = io_uring_get_sqe(ring)) == NULL && retries < MAX_RETRY)
+    {
+        retries++;
+        usleep(1); 
+    }
     if (!sqe)
     {
-        perror("Unable to get SQE for fsync");
+        fprintf(stderr, "Failed to get SQE after %d retries\n", retries);
         return -1;
     }
     io_uring_prep_fsync(sqe, 0, IORING_FSYNC_DATASYNC);
@@ -66,8 +71,23 @@ ssize_t aofWriteUring(int fd, const char *buf, size_t len, struct io_uring *ring
         return -1;
     }
     memcpy(temp_buf, buf, len);
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_write(sqe, 0, temp_buf, len, 0);
+
+    struct io_uring_sqe *sqe;
+    int retries = 0;
+    printf("Trying to get SQE\n");
+    while ((sqe = io_uring_get_sqe(ring)) == NULL && retries < MAX_RETRY)
+    {
+        retries++;
+        usleep(1);
+    }
+    if (!sqe)
+    {
+        je_free(temp_buf);
+        fprintf(stderr, "Failed to get SQE after %d retries\n", retries);
+        return -1;
+    }
+
+    io_uring_prep_write(sqe, 0, temp_buf, len, 0); // Ensure fd is valid
     sqe->flags |= IOSQE_IO_LINK;
     sqe->flags |= IOSQE_FIXED_FILE;
 

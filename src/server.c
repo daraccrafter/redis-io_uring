@@ -1418,7 +1418,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     {
         run_with_period(100)
         {
-            io_uring_submit(&server.aof_ring);
+            int nr = io_uring_submit(&server.aof_ring);
         }
     }
 
@@ -3010,7 +3010,7 @@ void initServer(void)
     if (server.aof_liburing)
     {
         server.aof_ring = setup_io_uring();
-        
+
         int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.aof_ring);
         if (err != 0)
         {
@@ -3018,7 +3018,7 @@ void initServer(void)
             exit(1);
         }
     }
-    
+
     /* Register a readable event for the pipe used to awake the event loop
      * from module threads. */
     if (aeCreateFileEvent(server.el, server.module_pipe[0], AE_READABLE,

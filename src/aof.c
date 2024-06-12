@@ -1190,7 +1190,7 @@ ssize_t aofWrite(int fd, const char *buf, size_t len)
  * However if force is set to 1 we'll write regardless of the background
  * fsync. */
 #define AOF_WRITE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
-
+int counter = 0;
 void flushAppendOnlyFile(int force)
 {
     ssize_t nwritten;
@@ -1273,9 +1273,11 @@ void flushAppendOnlyFile(int force)
         usleep(server.aof_flush_sleep);
     }
     latencyStartMonitor(latency);
-    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf),&server.aof_ring) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), &server.aof_ring) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
-
+    if (nwritten == -1)
+        counter++;
+    printf("FAILED WRITES: %d\n", counter);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
      * active, and when the above two conditions are missing.
