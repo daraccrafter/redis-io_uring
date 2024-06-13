@@ -1277,7 +1277,7 @@ void flushAppendOnlyFile(int force)
     latencyEndMonitor(latency);
     if (nwritten == -1)
         counter++;
-    printf("FAILED WRITES: %d\n", counter);
+    // printf("FAILED WRITES: %d\n", counter);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
      * active, and when the above two conditions are missing.
@@ -1375,6 +1375,7 @@ void flushAppendOnlyFile(int force)
              * was no way to undo it with ftruncate(2). */
             if (nwritten > 0)
             {
+                printf("HERE5\n");
                 server.aof_current_size += nwritten;
                 server.aof_last_incr_size += nwritten;
                 sdsrange(server.aof_buf, nwritten, -1);
@@ -1408,6 +1409,8 @@ void flushAppendOnlyFile(int force)
     }
     else
     {
+        printf("HERE4\n");
+
         sdsfree(server.aof_buf);
         server.aof_buf = sdsempty();
     }
@@ -1550,7 +1553,8 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc)
     if (server.aof_state == AOF_ON ||
         (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))
     {
-        server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
+        // printf("HERE3\n");
+        server.aof_buf = sdscatlennonull(server.aof_buf, buf, sdslen(buf));
     }
 
     sdsfree(buf);

@@ -1416,7 +1416,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     }
     if (server.aof_liburing)
     {
-        run_with_period(100)
+        run_with_period(300)
         {
             int nr = io_uring_submit(&server.aof_ring);
         }
@@ -3011,12 +3011,12 @@ void initServer(void)
     {
         server.aof_ring = setup_io_uring();
 
-        int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.aof_ring);
-        if (err != 0)
-        {
-            serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
-            exit(1);
-        }
+        // int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.aof_ring);
+        // if (err != 0)
+        // {
+        //     serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+        //     exit(1);
+        // }
     }
 
     /* Register a readable event for the pipe used to awake the event loop

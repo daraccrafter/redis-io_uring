@@ -347,6 +347,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
     }
 
     if (server.aof_state != AOF_OFF) {
+        printf("HERE1\n");
         overhead += sdsAllocSize(server.aof_buf);
     }
     return overhead;

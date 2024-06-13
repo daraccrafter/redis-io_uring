@@ -219,7 +219,7 @@ void sdsupdatelen(sds s)
 void sdsclear(sds s)
 {
     sdssetlen(s, 0);
-    s[0] = '\0';
+    //s[0] = '\0';
 }
 
 /* Enlarge the free space at the end of the sds string so that the caller
@@ -526,9 +526,23 @@ sds sdscatlen(sds s, const void *t, size_t len)
     memcpy(s + curlen, t, len);
     sdssetlen(s, curlen + len);
     s[curlen + len] = '\0';
+
     return s;
 }
 
+sds sdscatlennonull(sds s, const void *t, size_t len)
+{
+    size_t curlen = sdslen(s);
+
+    s = sdsMakeRoomFor(s, len);
+    if (s == NULL)
+        return NULL;
+    memcpy(s + curlen, t, len);
+    sdssetlen(s, curlen + len);
+   // s[curlen + len] = '\0';
+
+    return s;
+}
 /* Append the specified null terminated C string to the sds string 's'.
  *
  * After the call, the passed sds string is no longer valid and all the
