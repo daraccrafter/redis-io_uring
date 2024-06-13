@@ -1416,7 +1416,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     }
     if (server.aof_liburing)
     {
-        run_with_period(300)
+        run_with_period(1000)
         {
             int nr = io_uring_submit(&server.aof_ring);
         }
@@ -2957,6 +2957,7 @@ void initServer(void)
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
     server.aof_buf = sdsempty();
+    server.aof_buf_uring = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;

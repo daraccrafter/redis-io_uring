@@ -1375,7 +1375,6 @@ void flushAppendOnlyFile(int force)
              * was no way to undo it with ftruncate(2). */
             if (nwritten > 0)
             {
-                printf("HERE5\n");
                 server.aof_current_size += nwritten;
                 server.aof_last_incr_size += nwritten;
                 sdsrange(server.aof_buf, nwritten, -1);
@@ -1402,14 +1401,13 @@ void flushAppendOnlyFile(int force)
     /* Re-use AOF buffer when it is small enough. The maximum comes from the
      * arena size of 4k minus some overhead (but is otherwise arbitrary). */
 
-    if ((sdslen(server.aof_buf) + sdsavail(server.aof_buf)) < 4000)
+    if ((sdslen(server.aof_buf) + sdsavail(server.aof_buf)) < 12000)
     {
 
         sdsclear(server.aof_buf);
     }
     else
     {
-        printf("HERE4\n");
 
         sdsfree(server.aof_buf);
         server.aof_buf = sdsempty();
@@ -1553,7 +1551,6 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc)
     if (server.aof_state == AOF_ON ||
         (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))
     {
-        // printf("HERE3\n");
         server.aof_buf = sdscatlennonull(server.aof_buf, buf, sdslen(buf));
     }
 

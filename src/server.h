@@ -1841,6 +1841,7 @@ struct redisServer
     int aof_flush_sleep;                  /* Micros to sleep before flush. (used by tests) */
     int aof_rewrite_scheduled;            /* Rewrite once BGSAVE terminates. */
     sds aof_buf;                          /* AOF buffer, written before entering the event loop */
+    sds aof_buf_uring;                    /* AOF buffer for liburing */
     struct io_uring aof_ring;             /* io_uring instance for AOF*/
     pthread_t uring_completion_thread;           /* completion thread*/
     int aof_fd;                           /* File descriptor of currently selected AOF file */
