@@ -9,30 +9,47 @@
 #include "sds.h"
 #include "sdsalloc.h"
 
-#define QUEUE_DEPTH 4096
-#define MAX_RETRY 100
+#define QUEUE_DEPTH_XS 1024
+#define QUEUE_DEPTH_S 2048
+#define QUEUE_DEPTH_M 4096
+#define QUEUE_DEPTH_L 8192
+#define QUEUE_DEPTH_XL 16384
+#define QUEUE_DEPTH_XXL 32768
 
-#define OP_MASK 0xFF
-#define LEN_MASK 0xFFFFFFFFF
-#define PTR_MASK 0xFFFFFFFFF
+#define MAX_RETRY_XS 3
+#define MAX_RETRY_S 10
+#define MAX_RETRY_M 50
+#define MAX_RETRY_L 100
+#define MAX_RETRY_XL 500
+#define MAX_RETRY_XXL 1000
+
+#define CQE_BATCH_SIZE(queue_depth) ((queue_depth) / 10)
 
 #define OP_SHIFT 56
-#define LEN_SHIFT 28
+#define LEN_SHIFT 32
 #define PTR_SHIFT 0
+#define OP_MASK 0xFF
+#define LEN_MASK 0xFFFFFF
+#define PTR_MASK 0xFFFFFFFFFF
 
 enum Operation
 {
     WRITE_URING,
     FSYNC_URING,
 };
-typedef struct __attribute__((__packed__))
+typedef struct
 {
     uint8_t op;
-    uintptr_t buf_ptr;
     size_t len;
+    uintptr_t buf_ptr;
 } OperationData;
-struct io_uring setup_io_uring(void);
-void process_completions(struct io_uring *ring);
-int aofFsyncUring(int fd, struct io_uring *ring);
-ssize_t aofWriteUring(int fd, const char *buf, size_t len, struct io_uring *ring);
+typedef struct
+{
+    struct io_uring *ring;
+    int cqe_batch_size;
+} CompletionThreadArgs;
+struct io_uring setup_aof_io_uring(int QUEUE_DEPTH);
+void process_completions(void *args);
+int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY);
+ssize_t aofWriteUring(int fd, const char *buf, size_t len, struct io_uring *ring, int MAX_RETRY);
 #endif // End of the include guard

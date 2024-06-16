@@ -616,7 +616,7 @@ int writeAofManifestFile(sds buf)
         buf += nwritten;
     }
 
-    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
+    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count) : redis_fsync(server.aof_fd)) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the temp AOF file %s: %s.",
                   tmp_am_name, strerror(errno));
@@ -1063,7 +1063,7 @@ void stopAppendOnly(void)
 {
     serverAssert(server.aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
+    if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count) : redis_fsync(server.aof_fd)) == -1)
     {
         serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
     }
@@ -1249,6 +1249,32 @@ void flushAppendOnlyFile(int force)
                  * postponing the flush and return. */
                 server.aof_flush_postponed_start = server.mstime;
                 return;
+                if (server.aof_fsync == AOF_FSYNC_EVERYSEC && !force)
+                {
+                    /* With this append fsync policy we do background fsyncing.
+                     * If the fsync is still in progress we can try to delay
+                     * the write for a couple of seconds. */
+                    if (sync_in_progress)
+                    {
+                        if (server.aof_flush_postponed_start == 0)
+                        {
+                            /* No previous write postponing, remember that we are
+                             * postponing the flush and return. */
+                            server.aof_flush_postponed_start = server.mstime;
+                            return;
+                        }
+                        else if (server.mstime - server.aof_flush_postponed_start < 2000)
+                        {
+                            /* We were already waiting for fsync to finish, but for less
+                             * than two seconds this is still ok. Postpone again. */
+                            return;
+                        }
+                        /* Otherwise fall through, and go write since we can't wait
+                         * over two seconds. */
+                        server.aof_delayed_fsync++;
+                        serverLog(LL_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+                    }
+                }
             }
             else if (server.mstime - server.aof_flush_postponed_start < 2000)
             {
@@ -1273,7 +1299,7 @@ void flushAppendOnlyFile(int force)
         usleep(server.aof_flush_sleep);
     }
     latencyStartMonitor(latency);
-    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), &server.aof_ring) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), &server.aof_ring, server.liburing_retry_count) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
     if (nwritten == -1)
         counter++;
@@ -1300,99 +1326,13 @@ void flushAppendOnlyFile(int force)
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
 
-    if (nwritten != (ssize_t)sdslen(server.aof_buf) && !server.aof_liburing)
+    /* Successful write(2). If AOF was in error state, restore the
+     * OK state and log the event. */
+    if (server.aof_last_write_status == C_ERR)
     {
-        static time_t last_write_error_log = 0;
-        int can_log = 0;
-
-        /* Limit logging rate to 1 line per AOF_WRITE_LOG_ERROR_RATE seconds. */
-        if ((server.unixtime - last_write_error_log) > AOF_WRITE_LOG_ERROR_RATE)
-        {
-            can_log = 1;
-            last_write_error_log = server.unixtime;
-        }
-
-        /* Log the AOF write error and record the error code. */
-        if (nwritten == -1)
-        {
-            if (can_log)
-            {
-                serverLog(LL_WARNING, "Error writing to the AOF file: %s",
-                          strerror(errno));
-            }
-            server.aof_last_write_errno = errno;
-        }
-        else
-        {
-            if (can_log)
-            {
-                serverLog(LL_WARNING, "Short write while writing to "
-                                      "the AOF file: (nwritten=%lld, "
-                                      "expected=%lld)",
-                          (long long)nwritten,
-                          (long long)sdslen(server.aof_buf));
-            }
-
-            if (ftruncate(server.aof_fd, server.aof_last_incr_size) == -1)
-            {
-                if (can_log)
-                {
-                    serverLog(LL_WARNING, "Could not remove short write "
-                                          "from the append-only file.  Redis may refuse "
-                                          "to load the AOF the next time it starts.  "
-                                          "ftruncate: %s",
-                              strerror(errno));
-                }
-            }
-            else
-            {
-                /* If the ftruncate() succeeded we can set nwritten to
-                 * -1 since there is no longer partial data into the AOF. */
-                nwritten = -1;
-            }
-            server.aof_last_write_errno = ENOSPC;
-        }
-
-        /* Handle the AOF write error. */
-        if (server.aof_fsync == AOF_FSYNC_ALWAYS)
-        {
-            /* We can't recover when the fsync policy is ALWAYS since the reply
-             * for the client is already in the output buffers (both writes and
-             * reads), and the changes to the db can't be rolled back. Since we
-             * have a contract with the user that on acknowledged or observed
-             * writes are is synced on disk, we must exit. */
-            serverLog(LL_WARNING, "Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
-            exit(1);
-        }
-        else
-        {
-            /* Recover from failed write leaving data into the buffer. However
-             * set an error to stop accepting writes as long as the error
-             * condition is not cleared. */
-            server.aof_last_write_status = C_ERR;
-
-            /* Trim the sds buffer if there was a partial write, and there
-             * was no way to undo it with ftruncate(2). */
-            if (nwritten > 0)
-            {
-                server.aof_current_size += nwritten;
-                server.aof_last_incr_size += nwritten;
-                sdsrange(server.aof_buf, nwritten, -1);
-            }
-
-            return; /* We'll try again on the next call... */
-        }
-    }
-    else
-    {
-        /* Successful write(2). If AOF was in error state, restore the
-         * OK state and log the event. */
-        if (server.aof_last_write_status == C_ERR)
-        {
-            serverLog(LL_NOTICE,
-                      "AOF write error looks solved, Redis can write again.");
-            server.aof_last_write_status = C_OK;
-        }
+        serverLog(LL_NOTICE,
+                  "AOF write error looks solved, Redis can write again.");
+        server.aof_last_write_status = C_OK;
     }
 
     server.aof_current_size += nwritten;
@@ -1400,18 +1340,7 @@ void flushAppendOnlyFile(int force)
 
     /* Re-use AOF buffer when it is small enough. The maximum comes from the
      * arena size of 4k minus some overhead (but is otherwise arbitrary). */
-
-    if ((sdslen(server.aof_buf) + sdsavail(server.aof_buf)) < 12000)
-    {
-
-        sdsclear(server.aof_buf);
-    }
-    else
-    {
-
-        sdsfree(server.aof_buf);
-        server.aof_buf = sdsempty();
-    }
+    sdsclear(server.aof_buf);
 
 try_fsync:
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
@@ -1431,7 +1360,7 @@ try_fsync:
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
 
-        if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring) : redis_fsync(server.aof_fd)) == -1)
+        if ((server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count) : redis_fsync(server.aof_fd)) == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
                                   "AOF fsync policy is 'always': %s. Exiting...",
@@ -1449,8 +1378,7 @@ try_fsync:
     {
         if (!sync_in_progress)
         {
-            aof_background_fsync(server.aof_fd);
-            server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
+            aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count);
         }
         server.aof_last_fsync = server.mstime;
     }
@@ -1551,7 +1479,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc)
     if (server.aof_state == AOF_ON ||
         (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))
     {
-        server.aof_buf = sdscatlennonull(server.aof_buf, buf, sdslen(buf));
+        server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
     }
 
     sdsfree(buf);

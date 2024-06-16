@@ -78,6 +78,22 @@ configEnum aof_liburing_enum[] = {
     {"no", AOF_LIBURING_NO},
     {"yes", AOF_LIBURING_YES},
     {NULL, 0}};
+configEnum liburing_queue_depth_enum[] = {
+    {"xs", QUEUE_DEPTH_XS},
+    {"s", QUEUE_DEPTH_S},
+    {"m", QUEUE_DEPTH_M},
+    {"l", QUEUE_DEPTH_L},
+    {"xl", QUEUE_DEPTH_XL},
+    {"xxl", QUEUE_DEPTH_XXL},
+    {NULL, QUEUE_DEPTH_M}};
+configEnum liburing_retry_count_enum[] = {
+    {"xs", MAX_RETRY_XS},
+    {"s", MAX_RETRY_S},
+    {"m", MAX_RETRY_M},
+    {"l", MAX_RETRY_L},
+    {"xl", MAX_RETRY_XL},
+    {"xxl", MAX_RETRY_XXL},
+    {NULL, MAX_RETRY_M}};
 configEnum aof_liburing_sqpoll_enum[] = {
     {"no", AOF_LIBURING_SQPOLL_NO},
     {"yes", AOF_LIBURING_SQPOLL_YES},
@@ -3610,7 +3626,9 @@ standardConfig static_configs[] = {
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
     createEnumConfig("appendonly-liburing", NULL, MODIFIABLE_CONFIG, aof_liburing_enum, server.aof_liburing, AOF_LIBURING_NO, NULL, NULL),
-    //createEnumConfig("appendonly-liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
+    // createEnumConfig("appendonly-liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
+    createEnumConfig("liburing-queue-depth", NULL, MODIFIABLE_CONFIG, liburing_queue_depth_enum, server.liburing_queue_depth, QUEUE_DEPTH_M, NULL, NULL),
+    createEnumConfig("liburing-retry-count", NULL, MODIFIABLE_CONFIG, liburing_retry_count_enum, server.liburing_retry_count, MAX_RETRY_M, NULL, NULL),
 
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, server.oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
     createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, server.acl_pubsub_default, 0, NULL, NULL),

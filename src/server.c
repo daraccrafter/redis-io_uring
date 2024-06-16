@@ -1385,7 +1385,7 @@ void cronUpdateMemoryStats(void)
  * so in order to throttle execution of things we want to do less frequently
  * a macro is used: run_with_period(milliseconds) { .... }
  */
-
+int completions1 = 0, sub1 = 0;
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
 {
     int j;
@@ -1416,9 +1416,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     }
     if (server.aof_liburing)
     {
-        run_with_period(1000)
+        run_with_period(10)
         {
-            int nr = io_uring_submit(&server.aof_ring);
+            io_uring_submit(&server.aof_ring);
         }
     }
 
@@ -3010,14 +3010,16 @@ void initServer(void)
     /* Initialize IO_URING ring*/
     if (server.aof_liburing)
     {
-        server.aof_ring = setup_io_uring();
-
-        // int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.aof_ring);
-        // if (err != 0)
-        // {
-        //     serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
-        //     exit(1);
-        // }
+        server.aof_ring = setup_aof_io_uring(server.liburing_queue_depth);
+        CompletionThreadArgs args;
+        args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
+        args.ring = &server.aof_ring;
+        int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &args);
+        if (err != 0)
+        {
+            serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+            exit(1);
+        }
     }
 
     /* Register a readable event for the pipe used to awake the event loop
