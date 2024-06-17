@@ -43,11 +43,13 @@ typedef struct
     size_t len;
     uintptr_t buf_ptr;
 } OperationData;
+
 typedef struct
 {
     struct io_uring *ring;
     int cqe_batch_size;
 } CompletionThreadArgs;
+
 struct io_uring setup_aof_io_uring(int QUEUE_DEPTH);
 void process_completions(void *args);
 int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY);

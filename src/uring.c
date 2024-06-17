@@ -29,15 +29,15 @@ void process_completions(void *args)
         for (int i = 0; i < count; i++)
         {
             cqe = cqes[i];
-            if (cqe->res < 0)
+            if (cqe->res < 0 && cqe!=NULL)
             {
-                fprintf(stderr, "Error in completion: %s\n", strerror(-cqe->res));
+                printf( "Error in completion: %d\n",cqe->res);
             }
             else if (cqe->user_data != NULL)
             {
                 sdsfree((sds)cqe->user_data);
             }
-            io_uring_cqe_seen(ring, cqe); // Mark completion as seen
+            io_uring_cqe_seen(ring, cqe);
         }
     }
 }
@@ -68,6 +68,6 @@ ssize_t aofWriteUring(int fd, const char *buf, size_t len, struct io_uring *ring
 
     io_uring_prep_write(sqe, fd, sdsbuf, len, 0);
     sqe->flags |= IOSQE_IO_LINK;
-    sqe->flags |= IOSQE_CQE_SKIP_SUCCESS;
+    io_uring_sqe_set_data(sqe,sdsbuf);
     return len;
 }
