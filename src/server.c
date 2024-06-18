@@ -2991,6 +2991,7 @@ void initServer(void)
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
     server.last_sig_received = 0;
+    server.aof_filepath = sdsempty();
 
     /* Initiate acl info struct */
     server.acl_info.invalid_cmd_accesses = 0;
@@ -3014,6 +3015,9 @@ void initServer(void)
         CompletionThreadArgs args;
         args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
         args.ring = &server.aof_ring;
+        args.fd = &server.aof_fd;
+        args.aof_increment = &server.aof_increment;
+        args.fd_noappend = &server.aof_fd_noappend;
         int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &args);
         if (err != 0)
         {

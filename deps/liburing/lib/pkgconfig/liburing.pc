@@ -1,7 +1,7 @@
-prefix=/home/duru/Documents/Thesis-Darko/redis-io_uring/deps/liburing
+prefix=/home/darko/Documents/Thesis/redis-io_uring/deps/liburing
 exec_prefix=${prefix}
-libdir=/home/duru/Documents/Thesis-Darko/redis-io_uring/deps/liburing/lib
-includedir=/home/duru/Documents/Thesis-Darko/redis-io_uring/deps/liburing/include
+libdir=/home/darko/Documents/Thesis/redis-io_uring/deps/liburing/lib
+includedir=/home/darko/Documents/Thesis/redis-io_uring/deps/liburing/include
 
 Name: liburing
 Version: 2.7

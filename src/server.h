@@ -1830,11 +1830,14 @@ struct redisServer
     bool aof_liburing_sqpoll; /* Use sqpoll */
     int liburing_queue_depth; /* Number of entries in the io_uring queue */
     int liburing_retry_count; /* Number of retries for io_uring operations */
+    sds aof_filepath;         /* AOF file path */
+    int aof_fd_noappend;      /* Don't append to the AOF */
     pthread_mutex_t lock;
     pthread_cond_t cond;
     bool run_completions;
     char *aof_filename;                   /* Basename of the AOF file and manifest file */
     char *aof_dirname;                    /* Name of the AOF directory */
+    long long aof_increment;
     int aof_no_fsync_on_rewrite;          /* Don't fsync if a rewrite is in prog. */
     int aof_rewrite_perc;                 /* Rewrite AOF if % growth is > M and... */
     off_t aof_rewrite_min_size;           /* the AOF file is at least N bytes. */
@@ -1849,6 +1852,9 @@ struct redisServer
     sds aof_buf_uring;                    /* AOF buffer for liburing */
     struct io_uring aof_ring;             /* io_uring instance for AOF*/
     pthread_t uring_completion_thread;    /* completion thread*/
+    pthread_mutex_t partial_write_mutex;  /* Partial write lock */
+    pthread_cond_t partial_write_cond;    /* Partial write cond */
+    int partial_write_in_progress;        /* Partial write in progress */
     int aof_fd;                           /* File descriptor of currently selected AOF file */
     int aof_selected_db;                  /* Currently selected DB in AOF */
     mstime_t aof_flush_postponed_start;   /* mstime of postponed AOF flush */
