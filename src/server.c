@@ -5,7 +5,7 @@
  * Licensed under your choice of the Redis Source Available License 2.0
  * (RSALv2) or the Server Side Public License v1 (SSPLv1).
  */
-
+#include "uring.h"
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -52,46 +52,7 @@
 #else
 #define GNUC_VERSION_STR "0.0.0"
 #endif
-
-struct io_uring ring;
-
-void setup_io_uring()
-{
-
-    int ret = io_uring_queue_init(QUEUE_DEPTH, &ring, IORING_SETUP_IOPOLL);
-    if (ret < 0)
-    {
-        fprintf(stderr, "io_uring_queue_init_params: %s\n", strerror(-ret));
-        exit(1);
-    }
-} /* Our shared "common" objects */
-void completion_check()
-{
-    struct io_uring_cqe *cqe;
-    int ret;
-
-    while (1)
-    {
-        ret = io_uring_peek_cqe(&ring, &cqe);
-        if (ret < 0)
-        {
-            fprintf(stderr, "io_uring_peek_cqe: %s\n", strerror(-ret));
-            return;
-        }
-
-        if (!cqe)
-        {
-            break;
-        }
-
-        if (cqe->res < 0)
-        {
-            fprintf(stderr, "Async write failed: %s\n", strerror(-cqe->res));
-        }
-
-        io_uring_cqe_seen(&ring, cqe);
-    }
-}
+#define FLAG_MASK 0x1
 
 struct sharedObjectsStruct shared;
 
@@ -1424,7 +1385,7 @@ void cronUpdateMemoryStats(void)
  * so in order to throttle execution of things we want to do less frequently
  * a macro is used: run_with_period(milliseconds) { .... }
  */
-
+int completions1 = 0, sub1 = 0;
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
 {
     int j;
@@ -1451,6 +1412,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
                 server.hz = CONFIG_MAX_HZ;
                 break;
             }
+        }
+    }
+    if (server.aof_liburing)
+    {
+        run_with_period(10)
+        {
+            io_uring_submit(&server.aof_ring);
         }
     }
 
@@ -1559,10 +1527,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     /* We need to do a few operations on clients asynchronously. */
     clientsCron();
 
-    run_with_period(100)
-    {
-        completion_check();
-    }
     /* Handle background operations on Redis databases. */
     databasesCron();
 
@@ -1725,7 +1689,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
     server.cronloops++;
 
     server.el_cron_duration = getMonotonicUs() - cron_start;
-
     return 1000 / server.hz;
 }
 
@@ -1786,7 +1749,6 @@ void whileBlockedCron(void)
         /* Increment cronloop so that run_with_period works. */
         server.cronloops++;
     }
-
     /* Other cron jobs do not need to be done in a loop. No need to check
      * server.blocked_last_cron since we have an early exit at the top. */
 
@@ -2995,6 +2957,7 @@ void initServer(void)
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
     server.aof_buf = sdsempty();
+    server.aof_buf_uring = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
@@ -3028,6 +2991,7 @@ void initServer(void)
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
     server.last_sig_received = 0;
+    server.aof_filepath = sdsempty();
 
     /* Initiate acl info struct */
     server.acl_info.invalid_cmd_accesses = 0;
@@ -3045,7 +3009,23 @@ void initServer(void)
     }
 
     /* Initialize IO_URING ring*/
-    setup_io_uring();
+    if (server.aof_liburing)
+    {
+        server.aof_ring = setup_aof_io_uring(server.liburing_queue_depth);
+        CompletionThreadArgs args;
+        args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
+        args.ring = &server.aof_ring;
+        args.fd = &server.aof_fd;
+        args.aof_increment = &server.aof_increment;
+        args.fd_noappend = &server.aof_fd_noappend;
+        int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &args);
+        if (err != 0)
+        {
+            serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+            exit(1);
+        }
+    }
+
     /* Register a readable event for the pipe used to awake the event loop
      * from module threads. */
     if (aeCreateFileEvent(server.el, server.module_pipe[0], AE_READABLE,
@@ -4782,7 +4762,6 @@ int prepareForShutdown(int flags)
     serverLog(LL_NOTICE, "User requested shutdown...");
     if (server.supervised_mode == SUPERVISED_SYSTEMD)
         redisCommunicateSystemd("STOPPING=1\n");
-
     /* If we have any replicas, let them catch up the replication offset before
      * we shut down, to avoid data loss. */
     if (!(flags & SHUTDOWN_NOW) &&

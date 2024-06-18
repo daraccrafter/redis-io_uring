@@ -819,9 +819,10 @@ void aofOpenIfNeededOnServerStart(void)
     sds aof_name = getLastIncrAofName(server.aof_manifest);
 
     /* Here we should use 'O_APPEND' flag. */
-    sds aof_filepath = makePath(server.aof_dirname, aof_name);
-    server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
-    sdsfree(aof_filepath);
+    server.aof_filepath = makePath(server.aof_dirname, aof_name);
+    server.aof_fd = open(server.aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    server.aof_fd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT, 0644);
+    server.aof_increment = server.aof_manifest->curr_incr_file_seq;
     if (server.aof_fd == -1)
     {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s",
@@ -893,9 +894,10 @@ int openNewIncrAofForAppend(void)
         temp_am = aofManifestDup(server.aof_manifest);
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
-    sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
-    newfd = open(new_aof_filepath, O_RDWR | O_CREAT | O_DIRECT | O_SYNC, 0644);
-    sdsfree(new_aof_filepath);
+    server.aof_filepath = makePath(server.aof_dirname, new_aof_name);
+    newfd = open(server.aof_filepath, O_WRONLY | O_TRUNC | O_CREAT | O_APPEND, 0644);
+    int newfd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT, 0644);
+
     if (newfd == -1)
     {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s",
@@ -928,6 +930,8 @@ int openNewIncrAofForAppend(void)
         server.aof_last_fsync = server.mstime;
     }
     server.aof_fd = newfd;
+    server.aof_fd_noappend = newfd_noappend;
+    server.aof_increment = temp_am->curr_incr_file_seq;
 
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
@@ -942,7 +946,10 @@ cleanup:
     if (new_aof_name)
         sdsfree(new_aof_name);
     if (newfd != -1)
+    {
         close(newfd);
+        close(newfd_noappend);
+    }
     if (temp_am)
         aofManifestFree(temp_am);
     return C_ERR;
@@ -1071,6 +1078,7 @@ void stopAppendOnly(void)
         server.aof_last_fsync = server.mstime;
     }
     close(server.aof_fd);
+    close(server.aof_fd_noappend);
 
     server.aof_fd = -1;
     server.aof_selected_db = -1;
@@ -1140,31 +1148,6 @@ int startAppendOnly(void)
     return C_OK;
 }
 
-/* URING AOF */
-ssize_t aofWriteUring(int fd, const char *buf, size_t len)
-{
-    struct io_uring_sqe *sqe;
-
-    sqe = io_uring_get_sqe(&ring);
-    if (!sqe)
-    {
-        serverLog(LL_WARNING, "Unable to get SQE for write");
-        return -1;
-    }
-
-    io_uring_prep_write(sqe, fd, (void *)buf, len, 0);
-    io_uring_sqe_set_flags(sqe, IOSQE_IO_HARDLINK); // If needed, ensure appropriate flags are set
-
-    int ret = io_uring_submit(&ring);
-    if (ret < 0)
-    {
-        serverLog(LL_WARNING, "io_uring_submit failed for write: %s", strerror(-ret));
-        return -1;
-    }
-
-    return len;
-}
-
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
@@ -1219,7 +1202,17 @@ void flushAppendOnlyFile(int force)
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
-
+    bool reopen = false;
+    // pthread_mutex_lock(&server.partial_write_mutex);
+    // while (server.partial_write_in_progress)
+    // {
+    //     reopen=true;
+    //     pthread_cond_wait(&server.partial_write_cond, &server.partial_write_mutex);
+    // }
+    // if(reopen){
+    //     server.aof_fd = open(server.aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    // }
+    // pthread_mutex_unlock(&server.partial_write_mutex);
     if (sdslen(server.aof_buf) == 0)
     {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1297,8 +1290,14 @@ void flushAppendOnlyFile(int force)
         usleep(server.aof_flush_sleep);
     }
 
+    UringArgs args = {
+        .ring = &server.aof_ring,
+        .fd = server.aof_fd,
+        .MAX_RETRY = server.liburing_retry_count,
+        .write_offset = server.aof_last_incr_size,
+    };
     latencyStartMonitor(latency);
-    nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
@@ -1445,13 +1444,7 @@ try_fsync:
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        if (redis_fsync(server.aof_fd) == -1)
-        {
-            serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
-                                  "AOF fsync policy is 'always': %s. Exiting...",
-                      strerror(errno));
-            exit(1);
-        }
+        aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
@@ -1463,7 +1456,7 @@ try_fsync:
     {
         if (!sync_in_progress)
         {
-            aof_background_fsync(server.aof_fd);
+            aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count);
             server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         }
         server.aof_last_fsync = server.mstime;
@@ -2034,7 +2027,6 @@ int loadAppendOnlyFiles(aofManifest *am)
             }
         }
     }
-
     server.aof_current_size = total_size;
     /* Ideally, the aof_rewrite_base_size variable should hold the size of the
      * AOF when the last rewrite ended, this should include the size of the

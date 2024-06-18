@@ -58,7 +58,7 @@ typedef long long ustime_t; /* microsecond time type. */
                            N-elements flat arrays */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
-
+#include "uring.h"
 #define REDISMODULE_CORE 1
 typedef struct redisObject robj;
 #include "redismodule.h" /* Redis modules API defines. */
@@ -69,10 +69,6 @@ typedef struct redisObject robj;
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
-#include "liburing.h"
-
-#define QUEUE_DEPTH 1024
-extern struct io_uring ring;
 
 struct hdr_histogram;
 
@@ -519,6 +515,14 @@ typedef enum
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
 
+/* Append only liburing defines*/
+#define AOF_LIBURING_NO false
+#define AOF_LIBURING_YES true
+
+/*SQPOLL*/
+#define AOF_LIBURING_SQPOLL_NO false
+#define AOF_LIBURING_SQPOLL_YES true
+
 /* Replication diskless load defines */
 #define REPL_DISKLESS_LOAD_DISABLED 0
 #define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
@@ -722,8 +726,13 @@ typedef enum
 #define REDISMODULE_TYPE_SIGN(id) (((id) & ~((uint64_t)REDISMODULE_TYPE_ENCVER_MASK)) >> REDISMODULE_TYPE_ENCVER_BITS)
 
 /* Bit flags for moduleTypeAuxSaveFunc */
+#ifndef REDISMODULE_AUX_BEFORE_RDB
 #define REDISMODULE_AUX_BEFORE_RDB (1 << 0)
+#endif
+
+#ifndef REDISMODULE_AUX_AFTER_RDB
 #define REDISMODULE_AUX_AFTER_RDB (1 << 1)
+#endif
 
 struct RedisModule;
 struct RedisModuleIO;
@@ -1814,11 +1823,21 @@ struct redisServer
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each invocation of the event loop. */
     /* AOF persistence */
-    int aof_enabled;                      /* AOF configuration */
-    int aof_state;                        /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;                        /* Kind of fsync() policy */
+    int aof_enabled;          /* AOF configuration */
+    int aof_state;            /* AOF_(ON|OFF|WAIT_REWRITE) */
+    int aof_fsync;            /* Kind of fsync() policy */
+    bool aof_liburing;        /* Use liburing for AOF fsync */
+    bool aof_liburing_sqpoll; /* Use sqpoll */
+    int liburing_queue_depth; /* Number of entries in the io_uring queue */
+    int liburing_retry_count; /* Number of retries for io_uring operations */
+    sds aof_filepath;         /* AOF file path */
+    int aof_fd_noappend;      /* Don't append to the AOF */
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    bool run_completions;
     char *aof_filename;                   /* Basename of the AOF file and manifest file */
     char *aof_dirname;                    /* Name of the AOF directory */
+    long long aof_increment;
     int aof_no_fsync_on_rewrite;          /* Don't fsync if a rewrite is in prog. */
     int aof_rewrite_perc;                 /* Rewrite AOF if % growth is > M and... */
     off_t aof_rewrite_min_size;           /* the AOF file is at least N bytes. */
@@ -1830,6 +1849,12 @@ struct redisServer
     int aof_flush_sleep;                  /* Micros to sleep before flush. (used by tests) */
     int aof_rewrite_scheduled;            /* Rewrite once BGSAVE terminates. */
     sds aof_buf;                          /* AOF buffer, written before entering the event loop */
+    sds aof_buf_uring;                    /* AOF buffer for liburing */
+    struct io_uring aof_ring;             /* io_uring instance for AOF*/
+    pthread_t uring_completion_thread;    /* completion thread*/
+    pthread_mutex_t partial_write_mutex;  /* Partial write lock */
+    pthread_cond_t partial_write_cond;    /* Partial write cond */
+    int partial_write_in_progress;        /* Partial write in progress */
     int aof_fd;                           /* File descriptor of currently selected AOF file */
     int aof_selected_db;                  /* Currently selected DB in AOF */
     mstime_t aof_flush_postponed_start;   /* mstime of postponed AOF flush */
