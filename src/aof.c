@@ -821,6 +821,10 @@ void aofOpenIfNeededOnServerStart(void)
     /* Here we should use 'O_APPEND' flag. */
     server.aof_filepath = makePath(server.aof_dirname, aof_name);
     server.aof_fd = open(server.aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (server.aof_liburing_sqpoll)
+    {
+        io_uring_register_files(&server.aof_ring, &server.aof_fd, 1);
+    }
     server.aof_fd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT, 0644);
     server.aof_increment = server.aof_manifest->curr_incr_file_seq;
     if (server.aof_fd == -1)
@@ -930,6 +934,11 @@ int openNewIncrAofForAppend(void)
         server.aof_last_fsync = server.mstime;
     }
     server.aof_fd = newfd;
+    if (server.aof_liburing_sqpoll)
+    {
+        io_uring_unregister_files(&server.aof_ring);
+        io_uring_register_files(&server.aof_ring, &server.aof_fd, 1);
+    }
     server.aof_fd_noappend = newfd_noappend;
     server.aof_increment = temp_am->curr_incr_file_seq;
 
@@ -1202,17 +1211,7 @@ void flushAppendOnlyFile(int force)
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
-    bool reopen = false;
-    // pthread_mutex_lock(&server.partial_write_mutex);
-    // while (server.partial_write_in_progress)
-    // {
-    //     reopen=true;
-    //     pthread_cond_wait(&server.partial_write_cond, &server.partial_write_mutex);
-    // }
-    // if(reopen){
-    //     server.aof_fd = open(server.aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
-    // }
-    // pthread_mutex_unlock(&server.partial_write_mutex);
+    int ret;
     if (sdslen(server.aof_buf) == 0)
     {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1290,15 +1289,21 @@ void flushAppendOnlyFile(int force)
         usleep(server.aof_flush_sleep);
     }
 
-    UringArgs args = {
+    WriteUringArgs args = {
         .ring = &server.aof_ring,
         .fd = server.aof_fd,
         .MAX_RETRY = server.liburing_retry_count,
         .write_offset = server.aof_last_incr_size,
+        .fsync_always = server.aof_fsync == AOF_FSYNC_ALWAYS,
+        .sqpoll = server.aof_liburing_sqpoll,
     };
     latencyStartMonitor(latency);
     nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
     latencyEndMonitor(latency);
+    if (server.aof_liburing && nwritten == -1)
+    {
+        serverLog(LL_WARNING, "Failed to get sqe, queue is full");
+    }
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
      * active, and when the above two conditions are missing.
@@ -1444,19 +1449,60 @@ try_fsync:
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count);
+        ret = server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll) : redis_fsync(server.aof_fd);
+        if (redis_fsync(server.aof_fd) == -1)
+        {
+            serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
+                                  "AOF fsync policy is 'always': %s. Exiting...",
+                      strerror(errno));
+            exit(1);
+        }
+        if (server.aof_liburing && ret == -1)
+        {
+            serverLog(LL_WARNING, "Failed to get sqe, queue is full");
+        }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+
+        /* In the case fsync is set to always submit sqe's every flushAppendOnly call
+         *  for maximum persistance. */
+
+        if (server.aof_liburing)
+        {
+            int sub = io_uring_submit(&server.aof_ring);
+            if (sub > 0 && !server.completion_thread_running)
+            {
+                serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
+                int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
+                if (err != 0)
+                {
+                    serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+                }
+                server.completion_thread_running = true;
+                pthread_detach(server.uring_completion_thread);
+            }
+        }
     }
     else if (server.aof_fsync == AOF_FSYNC_EVERYSEC &&
              server.mstime - server.aof_last_fsync >= 1000)
     {
         if (!sync_in_progress)
         {
-            aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count);
+            if (server.aof_liburing)
+            {
+                ret = aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
+                if (server.aof_liburing && ret == -1)
+                {
+                    serverLog(LL_WARNING, "Failed to get sqe, queue is full");
+                }
+            }
+            else
+            {
+                aof_background_fsync(server.aof_fd);
+            }
             server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         }
         server.aof_last_fsync = server.mstime;

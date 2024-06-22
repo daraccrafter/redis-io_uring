@@ -1385,7 +1385,6 @@ void cronUpdateMemoryStats(void)
  * so in order to throttle execution of things we want to do less frequently
  * a macro is used: run_with_period(milliseconds) { .... }
  */
-int completions1 = 0, sub1 = 0;
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
 {
     int j;
@@ -1414,11 +1413,24 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
             }
         }
     }
-    if (server.aof_liburing)
+
+    /* In the case fsync is set to everysec or no submit sqe's every 10 milliseconds*/
+    if (server.aof_liburing && server.aof_fsync != AOF_FSYNC_ALWAYS)
     {
         run_with_period(10)
         {
-            io_uring_submit(&server.aof_ring);
+            int sub = io_uring_submit(&server.aof_ring);
+            if (sub > 0 && !server.completion_thread_running)
+            {
+                serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
+                int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
+                if (err != 0)
+                {
+                    serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+                }
+                server.completion_thread_running = true;
+                pthread_detach(server.uring_completion_thread);
+            }
         }
     }
 
@@ -3011,21 +3023,22 @@ void initServer(void)
     /* Initialize IO_URING ring*/
     if (server.aof_liburing)
     {
-        server.aof_ring = setup_aof_io_uring(server.liburing_queue_depth);
-        CompletionThreadArgs args;
-        args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
-        args.ring = &server.aof_ring;
-        args.fd = &server.aof_fd;
-        args.aof_increment = &server.aof_increment;
-        args.fd_noappend = &server.aof_fd_noappend;
-        int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &args);
-        if (err != 0)
+        int ret = server.aof_liburing_sqpoll ? setup_aof_io_uring_sq_poll(server.liburing_queue_depth, &server.aof_ring) : setup_aof_io_uring(server.liburing_queue_depth, &server.aof_ring);
+        if (ret != 0)
         {
-            serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+            serverPanic("Can't create IO_URING ring.");
             exit(1);
         }
-    }
 
+        server.completion_thread_args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
+        server.completion_thread_args.ring = &server.aof_ring;
+        server.completion_thread_args.fd = &server.aof_fd;
+        server.completion_thread_args.aof_increment = &server.aof_increment;
+        server.completion_thread_args.fd_noappend = &server.aof_fd_noappend;
+        server.completion_thread_running = false;
+        server.completion_thread_args.running = &server.completion_thread_running;
+        server.completion_thread_args.serverLog = _serverLog;
+    }
     /* Register a readable event for the pipe used to awake the event loop
      * from module threads. */
     if (aeCreateFileEvent(server.el, server.module_pipe[0], AE_READABLE,

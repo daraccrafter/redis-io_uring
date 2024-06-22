@@ -1,5 +1,5 @@
 
-#ifndef URING_H // Check if URING_H has been defined
+#ifndef URING_H
 #define URING_H
 #include <stdio.h>
 #pragma GCC diagnostic push
@@ -8,7 +8,8 @@
 #pragma GCC diagnostic pop
 #include "sds.h"
 #include "sdsalloc.h"
-#include <pthread.h>
+#include <unistd.h>
+#include <string.h>
 
 #define QUEUE_DEPTH_XS 1024
 #define QUEUE_DEPTH_S 2048
@@ -24,14 +25,11 @@
 #define MAX_RETRY_XL 500
 #define MAX_RETRY_XXL 1000
 
-#define CQE_BATCH_SIZE(queue_depth) ((queue_depth) / 10)
+// Log levels
+#define LL_NOTICE 2
+#define LL_WARNING 3
 
-#define OP_SHIFT 56
-#define LEN_SHIFT 32
-#define PTR_SHIFT 0
-#define OP_MASK 0xFF
-#define LEN_MASK 0xFFFFFF
-#define PTR_MASK 0xFFFFFFFFFF
+#define CQE_BATCH_SIZE(queue_depth) ((queue_depth) / 10)
 
 enum Operation
 {
@@ -55,6 +53,8 @@ typedef struct
     int *fd;
     int *fd_noappend;
     long long *aof_increment;
+    bool *running;
+    void (*serverLog)(int level, const char *fmt, ...);
 } CompletionThreadArgs;
 
 typedef struct
@@ -63,10 +63,14 @@ typedef struct
     int fd;
     int MAX_RETRY;
     off_t write_offset;
-    long long aof_file_incr;
-} UringArgs;
-struct io_uring setup_aof_io_uring(int QUEUE_DEPTH);
-void process_completions(void *args);
-int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY);
-ssize_t aofWriteUring(int fd, const char *buf, size_t len, UringArgs args);
-#endif // End of the include guard
+    bool sqpoll;
+    bool fsync_always;
+} WriteUringArgs;
+
+int setup_aof_io_uring_sq_poll(int QUEUE_DEPTH, struct io_uring *ring);
+int setup_aof_io_uring(int QUEUE_DEPTH, struct io_uring *ring);
+void *process_completions(void *args);
+int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY, bool sqpoll);
+ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args);
+
+#endif

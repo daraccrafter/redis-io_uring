@@ -1826,15 +1826,17 @@ struct redisServer
     int aof_enabled;          /* AOF configuration */
     int aof_state;            /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;            /* Kind of fsync() policy */
-    bool aof_liburing;        /* Use liburing for AOF fsync */
-    bool aof_liburing_sqpoll; /* Use sqpoll */
+    /*LIBURING*/
+    int aof_liburing;        /* Use liburing for AOF fsync */
+    int aof_liburing_sqpoll; /* Use sqpoll */
     int liburing_queue_depth; /* Number of entries in the io_uring queue */
     int liburing_retry_count; /* Number of retries for io_uring operations */
     sds aof_filepath;         /* AOF file path */
     int aof_fd_noappend;      /* Don't append to the AOF */
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-    bool run_completions;
+    CompletionThreadArgs completion_thread_args; /* Completion thread arguments */
+    bool completion_thread_running; /* Is the completion thread running? */
+    /*LIBURING*/
+
     char *aof_filename;                   /* Basename of the AOF file and manifest file */
     char *aof_dirname;                    /* Name of the AOF directory */
     long long aof_increment;

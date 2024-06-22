@@ -3626,7 +3626,7 @@ standardConfig static_configs[] = {
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
     createEnumConfig("appendonly-liburing", NULL, MODIFIABLE_CONFIG, aof_liburing_enum, server.aof_liburing, AOF_LIBURING_NO, NULL, NULL),
-    // createEnumConfig("appendonly-liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
+    createEnumConfig("liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
     createEnumConfig("liburing-queue-depth", NULL, MODIFIABLE_CONFIG, liburing_queue_depth_enum, server.liburing_queue_depth, QUEUE_DEPTH_M, NULL, NULL),
     createEnumConfig("liburing-retry-count", NULL, MODIFIABLE_CONFIG, liburing_retry_count_enum, server.liburing_retry_count, MAX_RETRY_M, NULL, NULL),
 
