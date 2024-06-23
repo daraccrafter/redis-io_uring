@@ -1450,7 +1450,7 @@ try_fsync:
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
         ret = server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll) : redis_fsync(server.aof_fd);
-        if (redis_fsync(server.aof_fd) == -1)
+        if (!server.aof_liburing && ret == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
                                   "AOF fsync policy is 'always': %s. Exiting...",
