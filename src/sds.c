@@ -219,7 +219,7 @@ void sdsupdatelen(sds s)
 void sdsclear(sds s)
 {
     sdssetlen(s, 0);
-    // s[0] = '\0';
+    s[0] = '\0';
 }
 
 /* Enlarge the free space at the end of the sds string so that the caller
