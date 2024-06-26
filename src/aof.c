@@ -2941,6 +2941,7 @@ int rewriteAppendOnlyFileBackground(void)
 
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0)
     {
+        char tmpfile[256];
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
