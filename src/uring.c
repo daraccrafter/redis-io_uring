@@ -182,3 +182,18 @@ ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args)
     io_uring_sqe_set_data(sqe, op_data);
     return len;
 }
+
+CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, void (*serverLog)(int level, const char *fmt, ...))
+{
+    CompletionThreadArgs args = {
+        .ring = ring,
+        .cqe_batch_size = cqe_batch_size,
+        .fd = fd,
+        .fd_noappend = fd_noappend,
+        .aof_increment = aof_increment,
+        .running = running,
+        .serverLog = serverLog};
+    return args;
+}
+
+

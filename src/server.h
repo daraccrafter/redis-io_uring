@@ -296,6 +296,10 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define AOF_ON 1           /* AOF is on */
 #define AOF_WAIT_REWRITE 2 /* AOF waits rewrite to start appending */
 
+#define AOF_LIBURING_OFF 0
+#define AOF_LIBURING_ON 1
+#define AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN 2
+
 /* AOF return values for loadAppendOnlyFiles() and loadSingleAppendOnlyFile() */
 #define AOF_OK 0
 #define AOF_NOT_EXIST 1
@@ -1827,6 +1831,7 @@ struct redisServer
     int aof_state;            /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;            /* Kind of fsync() policy */
     /*LIBURING*/
+    int aof_liburing_state;
     int aof_liburing;        /* Use liburing for AOF fsync */
     int aof_liburing_sqpoll; /* Use sqpoll */
     int liburing_queue_depth; /* Number of entries in the io_uring queue */

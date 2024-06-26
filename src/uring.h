@@ -72,5 +72,5 @@ int setup_aof_io_uring(int QUEUE_DEPTH, struct io_uring *ring);
 void *process_completions(void *args);
 int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY, bool sqpoll);
 ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args);
-
+CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, void (*serverLog)(int level, const char *fmt, ...));
 #endif

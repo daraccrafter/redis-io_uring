@@ -944,10 +944,10 @@ int openNewIncrAofForAppend(void)
         io_uring_unregister_files(&server.aof_ring);
         io_uring_register_files(&server.aof_ring, &server.aof_fd, 1);
     }
-    if (server.aof_liburing)
+    if (server.aof_liburing && temp_am)
     {
         server.aof_fd_noappend = newfd_noappend;
-        server.aof_increment = temp_am->curr_incr_file_seq;
+        server.aof_increment = server.aof_manifest->curr_incr_file_seq;
     }
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
@@ -1295,17 +1295,25 @@ void flushAppendOnlyFile(int force)
     {
         usleep(server.aof_flush_sleep);
     }
-
-    WriteUringArgs args = {
-        .ring = &server.aof_ring,
-        .fd = server.aof_fd,
-        .MAX_RETRY = server.liburing_retry_count,
-        .write_offset = server.aof_last_incr_size,
-        .fsync_always = server.aof_fsync == AOF_FSYNC_ALWAYS,
-        .sqpoll = server.aof_liburing_sqpoll,
-    };
     latencyStartMonitor(latency);
-    nwritten = server.aof_liburing ? aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args) : aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+
+    if (server.aof_liburing_state == AOF_LIBURING_ON)
+    {
+        WriteUringArgs args = {
+            .ring = &server.aof_ring,
+            .fd = server.aof_fd,
+            .MAX_RETRY = server.liburing_retry_count,
+            .write_offset = server.aof_last_incr_size,
+            .fsync_always = server.aof_fsync == AOF_FSYNC_ALWAYS,
+            .sqpoll = server.aof_liburing_sqpoll,
+        };
+        nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args);
+    }
+    else
+    {
+        nwritten = aofWrite(server.aof_fd, server.aof_buf, sdslen(server.aof_buf));
+    }
+
     latencyEndMonitor(latency);
     if (server.aof_liburing && nwritten == -1)
     {
@@ -1456,8 +1464,8 @@ try_fsync:
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        ret = server.aof_liburing ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll) : redis_fsync(server.aof_fd);
-        if (!server.aof_liburing && ret == -1)
+        ret = server.aof_liburing_state == AOF_LIBURING_ON ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll) : redis_fsync(server.aof_fd);
+        if (server.aof_liburing_state != AOF_LIBURING_ON && ret == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
                                   "AOF fsync policy is 'always': %s. Exiting...",
@@ -1477,7 +1485,7 @@ try_fsync:
         /* In the case fsync is set to always submit sqe's every flushAppendOnly call
          *  for maximum persistance. */
 
-        if (server.aof_liburing)
+        if (server.aof_liburing_state == AOF_LIBURING_ON)
         {
             int sub = io_uring_submit(&server.aof_ring);
             if (sub > 0 && !server.completion_thread_running)
@@ -1498,7 +1506,7 @@ try_fsync:
     {
         if (!sync_in_progress)
         {
-            if (server.aof_liburing)
+            if (server.aof_liburing_state == AOF_LIBURING_ON)
             {
                 ret = aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
                 if (server.aof_liburing && ret == -1)
@@ -2799,6 +2807,7 @@ int rewriteAppendOnlyFile(char *filename)
 
     /* Note that we have to use a different temp name here compared to the
      * one used by rewriteAppendOnlyFileBackground() function. */
+
     snprintf(tmpfile, 256, "temp-rewriteaof-%d.aof", (int)getpid());
     fp = fopen(tmpfile, "w");
     if (!fp)
@@ -2932,8 +2941,6 @@ int rewriteAppendOnlyFileBackground(void)
 
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0)
     {
-        char tmpfile[256];
-
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);

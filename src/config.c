@@ -2925,7 +2925,51 @@ static int updateAppendonly(const char **err)
     }
     return 1;
 }
+static int updateAppendonlyLiburing(const char **err)
+{
 
+    if (server.aof_enabled && server.aof_liburing_state == AOF_LIBURING_ON)
+    {
+        if(!server.completion_thread_running)
+        {
+            server.aof_liburing_state = AOF_LIBURING_OFF;
+            server.aof_liburing=0;
+            io_uring_queue_exit(&server.aof_ring);
+        }else
+         server.aof_liburing_state = AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN;
+        server.aof_liburing=0;
+    }else if(server.aof_liburing_state == AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN){
+        *err = "AOF liburing is still running, please wait for it to shutdown";
+    }
+    else if (!server.aof_enabled)
+    {
+        *err = "AOF must be enabled to use liburing";
+        return 0;
+    }
+    else if (server.aof_liburing_state == AOF_LIBURING_OFF)
+    {
+        int ret = setup_aof_io_uring(server.liburing_queue_depth, &server.aof_ring);
+        if (ret != 0)
+        {
+            serverPanic("Can't create IO_URING ring.");
+            exit(1);
+        }
+
+        server.completion_thread_args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
+        server.completion_thread_args = getCompletionThreadArgs(
+            &server.aof_ring,
+            CQE_BATCH_SIZE(server.liburing_queue_depth),
+            &server.aof_fd,
+            &server.aof_fd_noappend,
+            &server.aof_increment,
+            &server.completion_thread_running,
+            _serverLog);
+        server.completion_thread_running = false;
+        server.aof_liburing_state = AOF_LIBURING_ON;
+        server.aof_liburing=1;
+    }
+    return 1;
+}
 static int updateAofAutoGCEnabled(const char **err)
 {
     UNUSED(err);
@@ -3625,7 +3669,7 @@ standardConfig static_configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, server.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
-    createEnumConfig("appendonly-liburing", NULL, MODIFIABLE_CONFIG, aof_liburing_enum, server.aof_liburing, AOF_LIBURING_NO, NULL, NULL),
+    createEnumConfig("appendonly-liburing", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, aof_liburing_enum, server.aof_liburing, AOF_LIBURING_NO, NULL, updateAppendonlyLiburing),
     createEnumConfig("liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
     createEnumConfig("liburing-queue-depth", NULL, MODIFIABLE_CONFIG, liburing_queue_depth_enum, server.liburing_queue_depth, QUEUE_DEPTH_M, NULL, NULL),
     createEnumConfig("liburing-retry-count", NULL, MODIFIABLE_CONFIG, liburing_retry_count_enum, server.liburing_retry_count, MAX_RETRY_M, NULL, NULL),

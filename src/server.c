@@ -1413,9 +1413,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
             }
         }
     }
-
+    if (server.aof_liburing_state == AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN && server.aof_enabled)
+    {
+        if (!server.completion_thread_running)
+        {
+            server.aof_liburing_state = AOF_LIBURING_OFF;
+            server.completion_thread_running = 0;
+            io_uring_queue_exit(&server.aof_ring);
+        }
+    }
     /* In the case fsync is set to everysec or no submit sqe's every 10 milliseconds*/
-    if (server.aof_liburing && server.aof_fsync != AOF_FSYNC_ALWAYS)
+    if (server.aof_fsync != AOF_FSYNC_ALWAYS && server.aof_liburing_state==AOF_LIBURING_ON && server.aof_enabled)
     {
         run_with_period(10)
         {
@@ -3004,6 +3012,7 @@ void initServer(void)
     server.repl_good_slaves_count = 0;
     server.last_sig_received = 0;
     server.aof_filepath = sdsempty();
+    server.aof_liburing_state = AOF_LIBURING_OFF;
 
     /* Initiate acl info struct */
     server.acl_info.invalid_cmd_accesses = 0;
@@ -3031,13 +3040,16 @@ void initServer(void)
         }
 
         server.completion_thread_args.cqe_batch_size = CQE_BATCH_SIZE(server.liburing_queue_depth);
-        server.completion_thread_args.ring = &server.aof_ring;
-        server.completion_thread_args.fd = &server.aof_fd;
-        server.completion_thread_args.aof_increment = &server.aof_increment;
-        server.completion_thread_args.fd_noappend = &server.aof_fd_noappend;
+        server.completion_thread_args = getCompletionThreadArgs(
+            &server.aof_ring,
+            CQE_BATCH_SIZE(server.liburing_queue_depth),
+            &server.aof_fd,
+            &server.aof_fd_noappend,
+            &server.aof_increment,
+            &server.completion_thread_running,
+            _serverLog);
         server.completion_thread_running = false;
-        server.completion_thread_args.running = &server.completion_thread_running;
-        server.completion_thread_args.serverLog = _serverLog;
+        server.aof_liburing_state = AOF_LIBURING_ON;
     }
     /* Register a readable event for the pipe used to awake the event loop
      * from module threads. */
@@ -7723,7 +7735,6 @@ int iAmMaster(void)
 #ifdef REDIS_TEST
 #include "testhelp.h"
 #include "intset.h" /* Compact integer set structure */
-
 int __failed_tests = 0;
 int __test_num = 0;
 
