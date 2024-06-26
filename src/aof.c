@@ -902,7 +902,7 @@ int openNewIncrAofForAppend(void)
     server.aof_filepath = makePath(server.aof_dirname, new_aof_name);
     newfd = open(server.aof_filepath, O_WRONLY | O_TRUNC | O_CREAT | O_APPEND, 0644);
 
-    if (server.aof_liburing)
+    if (server.aof_liburing_state == AOF_LIBURING_ON)
     {
         newfd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT, 0644);
     }
@@ -944,11 +944,9 @@ int openNewIncrAofForAppend(void)
         io_uring_unregister_files(&server.aof_ring);
         io_uring_register_files(&server.aof_ring, &server.aof_fd, 1);
     }
-    if (server.aof_liburing && temp_am)
-    {
+    if (server.aof_liburing_state == AOF_LIBURING_ON)
         server.aof_fd_noappend = newfd_noappend;
-        server.aof_increment = server.aof_manifest->curr_incr_file_seq;
-    }
+    
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
     /* Reset the aof_last_incr_fsync_offset. */
@@ -968,6 +966,8 @@ cleanup:
     }
     if (temp_am)
         aofManifestFree(temp_am);
+        server.aof_increment = temp_am->curr_incr_file_seq;
+
     return C_ERR;
 }
 
@@ -2941,6 +2941,7 @@ int rewriteAppendOnlyFileBackground(void)
 
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0)
     {
+        char tmpfile[256];
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
