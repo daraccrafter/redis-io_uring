@@ -112,8 +112,7 @@ struct hdr_histogram;
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
 #define CONFIG_DEFAULT_BINDADDR \
     {                           \
-        "*", "-::*"             \
-    }
+        "*", "-::*"}
 #define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
 #define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
 #define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
@@ -1507,10 +1506,9 @@ typedef struct rdbSaveInfo
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT                                    \
-    {                                                         \
-        -1, 0, "0000000000000000000000000000000000000000", -1 \
-    }
+#define RDB_SAVE_INFO_INIT \
+    {                      \
+        -1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats
 {
@@ -1827,23 +1825,25 @@ struct redisServer
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each invocation of the event loop. */
     /* AOF persistence */
-    int aof_enabled;          /* AOF configuration */
-    int aof_state;            /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;            /* Kind of fsync() policy */
+    int aof_enabled; /* AOF configuration */
+    int aof_state;   /* AOF_(ON|OFF|WAIT_REWRITE) */
+    int aof_fsync;   /* Kind of fsync() policy */
     /*LIBURING*/
     int aof_liburing_state;
-    int aof_liburing;        /* Use liburing for AOF fsync */
-    int aof_liburing_sqpoll; /* Use sqpoll */
-    int liburing_queue_depth; /* Number of entries in the io_uring queue */
-    int liburing_retry_count; /* Number of retries for io_uring operations */
-    sds aof_filepath;         /* AOF file path */
-    int aof_fd_noappend;      /* Don't append to the AOF */
+    int aof_liburing;                            /* Use liburing for AOF fsync */
+    int aof_liburing_sqpoll;                     /* Use sqpoll */
+    int liburing_queue_depth;                    /* Number of entries in the io_uring queue */
+    int liburing_retry_count;                    /* Number of retries for io_uring operations */
+    sds aof_filepath;                            /* AOF file path */
+    int aof_fd_noappend;                         /* Don't append to the AOF */
     CompletionThreadArgs completion_thread_args; /* Completion thread arguments */
-    bool completion_thread_running; /* Is the completion thread running? */
+    bool completion_thread_running;              /* Is the completion thread running? */
+    pthread_mutex_t compl_thread_running_mutex;
+
     /*LIBURING*/
 
-    char *aof_filename;                   /* Basename of the AOF file and manifest file */
-    char *aof_dirname;                    /* Name of the AOF directory */
+    char *aof_filename; /* Basename of the AOF file and manifest file */
+    char *aof_dirname;  /* Name of the AOF directory */
     long long aof_increment;
     int aof_no_fsync_on_rewrite;          /* Don't fsync if a rewrite is in prog. */
     int aof_rewrite_perc;                 /* Rewrite AOF if % growth is > M and... */
@@ -2172,10 +2172,9 @@ typedef struct
     int numkeys;                           /* Number of key indices return */
     int size;                              /* Available array size */
 } getKeysResult;
-#define GETKEYS_RESULT_INIT             \
-    {                                   \
-        {{0}}, NULL, 0, MAX_KEYS_BUFFER \
-    }
+#define GETKEYS_RESULT_INIT \
+    {                       \
+        {{0}}, NULL, 0, MAX_KEYS_BUFFER}
 
 /* Key specs definitions.
  *

@@ -2688,8 +2688,7 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {                                                                                  \
         .type = SPECIAL_CONFIG,                                                        \
         embedCommonConfig(name, alias, modifiable)                                     \
-            embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)               \
-    }
+            embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
 static int isValidActiveDefrag(int val, const char **err)
 {
@@ -2930,15 +2929,18 @@ static int updateAppendonlyLiburing(const char **err)
 
     if (server.aof_enabled && server.aof_liburing_state == AOF_LIBURING_ON)
     {
-        if(!server.completion_thread_running)
+        if (!server.completion_thread_running)
         {
             server.aof_liburing_state = AOF_LIBURING_OFF;
-            server.aof_liburing=0;
+            server.aof_liburing = 0;
             io_uring_queue_exit(&server.aof_ring);
-        }else
-         server.aof_liburing_state = AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN;
-        server.aof_liburing=0;
-    }else if(server.aof_liburing_state == AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN){
+        }
+        else
+            server.aof_liburing_state = AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN;
+        server.aof_liburing = 0;
+    }
+    else if (server.aof_liburing_state == AOF_LIBURING_WAIT_COMPLETION_THREAD_SHUTDOWN)
+    {
         *err = "AOF liburing is still running, please wait for it to shutdown";
     }
     else if (!server.aof_enabled)
@@ -2948,6 +2950,7 @@ static int updateAppendonlyLiburing(const char **err)
     }
     else if (server.aof_liburing_state == AOF_LIBURING_OFF)
     {
+        pthread_mutex_init(&server.compl_thread_running_mutex, NULL);
         int ret = setup_aof_io_uring(server.liburing_queue_depth, &server.aof_ring);
         if (ret != 0)
         {
@@ -2963,10 +2966,11 @@ static int updateAppendonlyLiburing(const char **err)
             &server.aof_fd_noappend,
             &server.aof_increment,
             &server.completion_thread_running,
+            &server.compl_thread_running_mutex,
             _serverLog);
         server.completion_thread_running = false;
         server.aof_liburing_state = AOF_LIBURING_ON;
-        server.aof_liburing=1;
+        server.aof_liburing = 1;
     }
     return 1;
 }

@@ -1423,24 +1423,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
         }
     }
     /* In the case fsync is set to everysec or no submit sqe's every 10 milliseconds*/
-    if (server.aof_fsync != AOF_FSYNC_ALWAYS && server.aof_liburing_state==AOF_LIBURING_ON && server.aof_enabled)
-    {
-        run_with_period(10)
-        {
-            int sub = io_uring_submit(&server.aof_ring);
-            if (sub > 0 && !server.completion_thread_running)
-            {
-                serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
-                int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
-                if (err != 0)
-                {
-                    serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
-                }
-                server.completion_thread_running = true;
-                pthread_detach(server.uring_completion_thread);
-            }
-        }
-    }
 
     /* for debug purposes: skip actual cron work if pause_cron is on */
     if (server.pause_cron)
@@ -3032,6 +3014,8 @@ void initServer(void)
     /* Initialize IO_URING ring*/
     if (server.aof_liburing)
     {
+        pthread_mutex_init(&server.compl_thread_running_mutex, NULL);
+        server.aof_fsync = AOF_FSYNC_ALWAYS;
         int ret = server.aof_liburing_sqpoll ? setup_aof_io_uring_sq_poll(server.liburing_queue_depth, &server.aof_ring) : setup_aof_io_uring(server.liburing_queue_depth, &server.aof_ring);
         if (ret != 0)
         {
@@ -3046,7 +3030,7 @@ void initServer(void)
             &server.aof_fd,
             &server.aof_fd_noappend,
             &server.aof_increment,
-            &server.completion_thread_running,
+            &server.completion_thread_running, &server.compl_thread_running_mutex,
             _serverLog);
         server.completion_thread_running = false;
         server.aof_liburing_state = AOF_LIBURING_ON;

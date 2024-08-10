@@ -37,7 +37,7 @@ void *process_completions(void *args)
     long long *aof_increment = arg->aof_increment;
     bool *running = arg->running;
     void (*serverLog)(int level, const char *fmt, ...) = arg->serverLog;
-
+    pthread_mutex_t *lock = arg->lock;
     struct io_uring_cqe *cqe;
     struct io_uring_cqe *cqes[cqe_batch_size];
 
@@ -49,9 +49,11 @@ void *process_completions(void *args)
         if (count == 0)
         {
             no_completion_count++;
-            if (no_completion_count > 1000)
+            if (no_completion_count > 10000)
             {
+                pthread_mutex_lock(lock);
                 *running = false;
+                pthread_mutex_unlock(lock);
                 break;
             }
             usleep(1000);
@@ -96,11 +98,11 @@ void *process_completions(void *args)
                             .fsync_always = false};
                         if (*aof_increment != op_data->aof_file_incr)
                         {
-                            aofWriteUring(*fd, (sds)op_data->buf_ptr, op_data->len, args); // Case new file: where new file is created alredy and rewrite happened (meaning we lost this data), so just append it to new file
+                            aofWriteUring(*fd, (sds)op_data->buf_ptr, op_data->len, args);
                         }
                         else
                         {
-                            aofWriteUring(*fd_noappend, (sds)((char *)op_data->buf_ptr + cqe->res), op_data->len - cqe->res, args); // Case same file: where we deal with partial write using fd_noappend (because we don't want to append to the file, we want to write to exact offset)
+                            aofWriteUring(*fd_noappend, (sds)((char *)op_data->buf_ptr + cqe->res), op_data->len - cqe->res, args);
                         }
                     }
                     else
@@ -122,6 +124,7 @@ void *process_completions(void *args)
             io_uring_cqe_seen(ring, cqe);
         }
     }
+    serverLog(LL_NOTICE, "Completion thread exiting...");
     return NULL;
 }
 /*returns 0 on successful sqe, or -1 on failed to get sqe*/
@@ -146,6 +149,7 @@ int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY, bool sqpoll)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
+    sqe->flags |= IOSQE_IO_LINK;
     sqe->flags |= IOSQE_CQE_SKIP_SUCCESS;
     io_uring_sqe_set_data(sqe, op_data);
 
@@ -171,10 +175,8 @@ ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args)
         return -1;
     }
     io_uring_prep_write(sqe, args.sqpoll ? 0 : fd, sdsbuf, len, args.write_offset);
-    if (args.fsync_always)
-    {
-        sqe->flags |= IOSQE_IO_LINK;
-    }
+    sqe->flags |= IOSQE_IO_LINK;
+
     if (args.sqpoll)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
@@ -183,7 +185,7 @@ ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args)
     return len;
 }
 
-CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, void (*serverLog)(int level, const char *fmt, ...))
+CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, pthread_mutex_t *lock, void (*serverLog)(int level, const char *fmt, ...))
 {
     CompletionThreadArgs args = {
         .ring = ring,
@@ -192,8 +194,8 @@ CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batc
         .fd_noappend = fd_noappend,
         .aof_increment = aof_increment,
         .running = running,
-        .serverLog = serverLog};
+        .lock = lock,
+        .serverLog = serverLog,
+    };
     return args;
 }
-
-

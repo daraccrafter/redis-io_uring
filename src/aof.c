@@ -946,7 +946,7 @@ int openNewIncrAofForAppend(void)
     }
     if (server.aof_liburing_state == AOF_LIBURING_ON)
         server.aof_fd_noappend = newfd_noappend;
-    
+
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
     /* Reset the aof_last_incr_fsync_offset. */
@@ -966,7 +966,7 @@ cleanup:
     }
     if (temp_am)
         aofManifestFree(temp_am);
-        server.aof_increment = temp_am->curr_incr_file_seq;
+    server.aof_increment = temp_am->curr_incr_file_seq;
 
     return C_ERR;
 }
@@ -1488,17 +1488,20 @@ try_fsync:
         if (server.aof_liburing_state == AOF_LIBURING_ON)
         {
             int sub = io_uring_submit(&server.aof_ring);
+            pthread_mutex_lock(&server.compl_thread_running_mutex);
             if (sub > 0 && !server.completion_thread_running)
             {
+                server.completion_thread_running = true;
                 serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
+                server.completion_thread_running = true;
                 int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
                 if (err != 0)
                 {
                     serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
                 }
-                server.completion_thread_running = true;
                 pthread_detach(server.uring_completion_thread);
             }
+            pthread_mutex_unlock(&server.compl_thread_running_mutex);
         }
     }
     else if (server.aof_fsync == AOF_FSYNC_EVERYSEC &&
