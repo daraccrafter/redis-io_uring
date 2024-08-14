@@ -904,7 +904,7 @@ int openNewIncrAofForAppend(void)
 
     if (server.aof_liburing_state == AOF_LIBURING_ON)
     {
-        newfd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT, 0644);
+        newfd_noappend = open(server.aof_filepath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     }
 
     if (newfd == -1)
@@ -935,7 +935,13 @@ int openNewIncrAofForAppend(void)
      * is already synced at this point so fsync doesn't matter. */
     if (server.aof_fd != -1)
     {
+        printf("aof_background_fsync_and_close\n");
         aof_background_fsync_and_close(server.aof_fd);
+        if (server.aof_liburing_state == AOF_LIBURING_ON)
+        {
+            printf("aof_background_fsync_and_close noappend\n");
+            aof_background_fsync_and_close(server.aof_fd_noappend);
+        }
         server.aof_last_fsync = server.mstime;
     }
     server.aof_fd = newfd;
@@ -1308,6 +1314,22 @@ void flushAppendOnlyFile(int force)
             .sqpoll = server.aof_liburing_sqpoll,
         };
         nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args);
+        aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
+        int sub = io_uring_submit(&server.aof_ring);
+        pthread_mutex_lock(&server.compl_thread_running_mutex);
+        if (!server.completion_thread_running)
+        {
+            server.completion_thread_running = true;
+            serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
+            server.completion_thread_running = true;
+            int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
+            if (err != 0)
+            {
+                serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
+            }
+            pthread_detach(server.uring_completion_thread);
+        }
+        pthread_mutex_unlock(&server.compl_thread_running_mutex);
     }
     else
     {
@@ -1464,7 +1486,8 @@ try_fsync:
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        ret = server.aof_liburing_state == AOF_LIBURING_ON ? aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll) : redis_fsync(server.aof_fd);
+        ret = server.aof_liburing_state == AOF_LIBURING_ON ? 0 : redis_fsync(server.aof_fd);
+
         if (server.aof_liburing_state != AOF_LIBURING_ON && ret == -1)
         {
             serverLog(LL_WARNING, "Can't persist AOF for fsync error when the "
@@ -1484,25 +1507,6 @@ try_fsync:
 
         /* In the case fsync is set to always submit sqe's every flushAppendOnly call
          *  for maximum persistance. */
-
-        if (server.aof_liburing_state == AOF_LIBURING_ON)
-        {
-            int sub = io_uring_submit(&server.aof_ring);
-            pthread_mutex_lock(&server.compl_thread_running_mutex);
-            if (sub > 0 && !server.completion_thread_running)
-            {
-                server.completion_thread_running = true;
-                serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
-                server.completion_thread_running = true;
-                int err = pthread_create(&server.uring_completion_thread, NULL, process_completions, &server.completion_thread_args);
-                if (err != 0)
-                {
-                    serverLog(LL_WARNING, "Can't create IO_URING completion thread: %s", strerror(err));
-                }
-                pthread_detach(server.uring_completion_thread);
-            }
-            pthread_mutex_unlock(&server.compl_thread_running_mutex);
-        }
     }
     else if (server.aof_fsync == AOF_FSYNC_EVERYSEC &&
              server.mstime - server.aof_last_fsync >= 1000)
@@ -1511,11 +1515,11 @@ try_fsync:
         {
             if (server.aof_liburing_state == AOF_LIBURING_ON)
             {
-                ret = aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
-                if (server.aof_liburing && ret == -1)
-                {
-                    serverLog(LL_WARNING, "Failed to get sqe, queue is full");
-                }
+                // ret = aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
+                // if (server.aof_liburing && ret == -1)
+                // {
+                //     serverLog(LL_WARNING, "Failed to get sqe, queue is full");
+                // }
             }
             else
             {
@@ -1525,6 +1529,8 @@ try_fsync:
         }
         server.aof_last_fsync = server.mstime;
     }
+end:
+    return;
 }
 
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv)
@@ -2946,6 +2952,7 @@ int rewriteAppendOnlyFileBackground(void)
     {
         char tmpfile[256];
         /* Child */
+        sleep(1000);
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());

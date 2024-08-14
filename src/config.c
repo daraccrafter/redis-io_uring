@@ -94,6 +94,10 @@ configEnum liburing_retry_count_enum[] = {
     {"xl", MAX_RETRY_XL},
     {"xxl", MAX_RETRY_XXL},
     {NULL, MAX_RETRY_M}};
+configEnum correct_test_enum[] = {
+    {"yes", 1},
+    {"no", 0},
+    {NULL, 0}};
 configEnum aof_liburing_sqpoll_enum[] = {
     {"no", AOF_LIBURING_SQPOLL_NO},
     {"yes", AOF_LIBURING_SQPOLL_YES},
@@ -2924,6 +2928,31 @@ static int updateAppendonly(const char **err)
     }
     return 1;
 }
+static int updateCorrectTestReqSize(char *val, const char **err)
+{
+    if (server.correct_test)
+    {
+        server.correct_test_reqnum = atoi(val);
+    }
+    else
+    {
+        *err = "correct_test is not enabled";
+    }
+    return 1;
+}
+static int updateCorrectTest(const char **err)
+{
+    UNUSED(err);
+    if (server.correct_test)
+    {
+        server.correct_test = 0;
+    }
+    else
+    {
+        server.correct_test = 1;
+    }
+    return 1;
+}
 static int updateAppendonlyLiburing(const char **err)
 {
 
@@ -2967,6 +2996,8 @@ static int updateAppendonlyLiburing(const char **err)
             &server.aof_increment,
             &server.completion_thread_running,
             &server.compl_thread_running_mutex,
+            &server.correct_test,
+            &server.correct_test_reqnum,
             _serverLog);
         server.completion_thread_running = false;
         server.aof_liburing_state = AOF_LIBURING_ON;
@@ -3677,6 +3708,8 @@ standardConfig static_configs[] = {
     createEnumConfig("liburing-sqpoll", NULL, MODIFIABLE_CONFIG, aof_liburing_sqpoll_enum, server.aof_liburing_sqpoll, AOF_LIBURING_SQPOLL_NO, NULL, NULL),
     createEnumConfig("liburing-queue-depth", NULL, MODIFIABLE_CONFIG, liburing_queue_depth_enum, server.liburing_queue_depth, QUEUE_DEPTH_M, NULL, NULL),
     createEnumConfig("liburing-retry-count", NULL, MODIFIABLE_CONFIG, liburing_retry_count_enum, server.liburing_retry_count, MAX_RETRY_M, NULL, NULL),
+    createEnumConfig("correct-test", NULL, MODIFIABLE_CONFIG, correct_test_enum, server.correct_test, 0, NULL, NULL),
+    createIntConfig("correct-test-reqnum", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.correct_test_reqnum, 100000, INTEGER_CONFIG, NULL, NULL),
 
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, server.oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
     createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, server.acl_pubsub_default, 0, NULL, NULL),

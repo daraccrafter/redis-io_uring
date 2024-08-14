@@ -3031,6 +3031,7 @@ void initServer(void)
             &server.aof_fd_noappend,
             &server.aof_increment,
             &server.completion_thread_running, &server.compl_thread_running_mutex,
+            &server.correct_test, &server.correct_test_reqnum,
             _serverLog);
         server.completion_thread_running = false;
         server.aof_liburing_state = AOF_LIBURING_ON;

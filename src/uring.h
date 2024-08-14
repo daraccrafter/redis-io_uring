@@ -55,6 +55,8 @@ typedef struct
     long long *aof_increment;
     bool *running;
     pthread_mutex_t *lock;
+    bool *correct_test_on;
+    int *correct_test_reqnum;
     void (*serverLog)(int level, const char *fmt, ...);
 } CompletionThreadArgs;
 
@@ -73,5 +75,5 @@ int setup_aof_io_uring(int QUEUE_DEPTH, struct io_uring *ring);
 void *process_completions(void *args);
 int aofFsyncUring(int fd, struct io_uring *ring, int MAX_RETRY, bool sqpoll);
 ssize_t aofWriteUring(int fd, const char *buf, size_t len, WriteUringArgs args);
-CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, pthread_mutex_t *lock, void (*serverLog)(int level, const char *fmt, ...));
+CompletionThreadArgs getCompletionThreadArgs(struct io_uring *ring, int cqe_batch_size, int *fd, int *fd_noappend, long long *aof_increment, bool *running, pthread_mutex_t *lock, bool *correct_test, int *correct_test_reqnum, void (*serverLog)(int level, const char *fmt, ...));
 #endif

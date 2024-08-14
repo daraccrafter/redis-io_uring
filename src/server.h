@@ -1830,15 +1830,20 @@ struct redisServer
     int aof_fsync;   /* Kind of fsync() policy */
     /*LIBURING*/
     int aof_liburing_state;
-    int aof_liburing;                            /* Use liburing for AOF fsync */
-    int aof_liburing_sqpoll;                     /* Use sqpoll */
-    int liburing_queue_depth;                    /* Number of entries in the io_uring queue */
-    int liburing_retry_count;                    /* Number of retries for io_uring operations */
+    int aof_liburing;         /* Use liburing for AOF fsync */
+    int aof_liburing_sqpoll;  /* Use sqpoll */
+    int liburing_queue_depth; /* Number of entries in the io_uring queue */
+    int liburing_retry_count; /* Number of retries for io_uring operations */
+    int correct_test;
+    int correct_test_reqnum;
     sds aof_filepath;                            /* AOF file path */
     int aof_fd_noappend;                         /* Don't append to the AOF */
     CompletionThreadArgs completion_thread_args; /* Completion thread arguments */
     bool completion_thread_running;              /* Is the completion thread running? */
     pthread_mutex_t compl_thread_running_mutex;
+    pthread_mutex_t fsync_lock;
+    pthread_cond_t fsync_cond;
+    atomic_int fsync_completed;
 
     /*LIBURING*/
 
