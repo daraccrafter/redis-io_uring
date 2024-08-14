@@ -2991,7 +2991,6 @@ static int updateAppendonlyLiburing(const char **err)
         server.completion_thread_args = getCompletionThreadArgs(
             &server.aof_ring,
             CQE_BATCH_SIZE(server.liburing_queue_depth),
-            &server.aof_fd,
             &server.aof_fd_noappend,
             &server.aof_increment,
             &server.completion_thread_running,

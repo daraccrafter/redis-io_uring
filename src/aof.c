@@ -935,11 +935,9 @@ int openNewIncrAofForAppend(void)
      * is already synced at this point so fsync doesn't matter. */
     if (server.aof_fd != -1)
     {
-        printf("aof_background_fsync_and_close\n");
         aof_background_fsync_and_close(server.aof_fd);
         if (server.aof_liburing_state == AOF_LIBURING_ON)
         {
-            printf("aof_background_fsync_and_close noappend\n");
             aof_background_fsync_and_close(server.aof_fd_noappend);
         }
         server.aof_last_fsync = server.mstime;
@@ -960,6 +958,8 @@ int openNewIncrAofForAppend(void)
     /* Update `server.aof_manifest`. */
     if (temp_am)
         aofManifestFreeAndUpdate(temp_am);
+    server.aof_increment = temp_am->curr_incr_file_seq;
+
     return C_OK;
 
 cleanup:
@@ -972,7 +972,6 @@ cleanup:
     }
     if (temp_am)
         aofManifestFree(temp_am);
-    server.aof_increment = temp_am->curr_incr_file_seq;
 
     return C_ERR;
 }
@@ -1225,6 +1224,7 @@ void flushAppendOnlyFile(int force)
     int sync_in_progress = 0;
     mstime_t latency;
     int ret;
+
     if (sdslen(server.aof_buf) == 0)
     {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1312,12 +1312,13 @@ void flushAppendOnlyFile(int force)
             .write_offset = server.aof_last_incr_size,
             .fsync_always = server.aof_fsync == AOF_FSYNC_ALWAYS,
             .sqpoll = server.aof_liburing_sqpoll,
+            .aof_increment = server.aof_increment,
         };
-        nwritten = aofWriteUring(server.aof_fd, server.aof_buf, sdslen(server.aof_buf), args);
-        aofFsyncUring(server.aof_fd, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll);
+        nwritten = aofWriteUring(server.aof_fd_noappend, server.aof_buf, sdslen(server.aof_buf), args);
+        aofFsyncUring(server.aof_fd_noappend, &server.aof_ring, server.liburing_retry_count, server.aof_liburing_sqpoll, server.aof_increment);
         int sub = io_uring_submit(&server.aof_ring);
         pthread_mutex_lock(&server.compl_thread_running_mutex);
-        if (!server.completion_thread_running)
+        if (sub > 0 && !server.completion_thread_running)
         {
             server.completion_thread_running = true;
             serverLog(LL_NOTICE, "IO_URING completion thread not running, starting it now.");
@@ -1529,8 +1530,6 @@ try_fsync:
         }
         server.aof_last_fsync = server.mstime;
     }
-end:
-    return;
 }
 
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv)
@@ -2952,7 +2951,6 @@ int rewriteAppendOnlyFileBackground(void)
     {
         char tmpfile[256];
         /* Child */
-        sleep(1000);
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)getpid());

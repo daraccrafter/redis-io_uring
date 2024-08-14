@@ -3027,9 +3027,7 @@ void initServer(void)
         server.completion_thread_args = getCompletionThreadArgs(
             &server.aof_ring,
             CQE_BATCH_SIZE(server.liburing_queue_depth),
-            &server.aof_fd,
-            &server.aof_fd_noappend,
-            &server.aof_increment,
+            &server.aof_fd_noappend, &server.aof_increment,
             &server.completion_thread_running, &server.compl_thread_running_mutex,
             &server.correct_test, &server.correct_test_reqnum,
             _serverLog);
