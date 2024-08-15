@@ -120,6 +120,7 @@ void *process_completions(void *args)
                     }
                     else
                     {
+                        zfree(op_data->buf_ptr);
                     }
                     break;
                 case FSYNC_URING:
